@@ -7,7 +7,7 @@ CREATE TABLE drip_user (
 , email_count int not null default 0
 , email_last_sent datetime null
 , max_frequency_hours int not null default 24
-, date_created timestamp default '0000-00-00 00:00:00'
+, date_created timestamp default now()
 , last_updated timestamp default now() on update now()
 , PRIMARY KEY (drip_user_id)
 );
@@ -21,8 +21,7 @@ CREATE TABLE drip_tag (
 );
 
 CREATE TABLE drip_user_tag_xref (
-  xref_id BIGINT NOT NULL
-, tag_id BIGINT not NULL
+  tag_id BIGINT not NULL
 , drip_user_id BIGINT NOT NULL
 , int_val bigint NULL
 , date_val datetime NULL
@@ -58,6 +57,7 @@ CREATE TABLE drip_email_template (
 CREATE TABLE drip_send_rule (
   send_rule_id BIGINT NOT NULL AUTO_INCREMENT
 , email_template_id bigint not null
+, active int not null default 1
 , rule_priority double NOT NULL default 1.0
 , n_hours_after_tag_added double null
 , after_tag_id bigint null
@@ -65,11 +65,13 @@ CREATE TABLE drip_send_rule (
 , int_val_lt bigint NULL
 , date_val_gt datetime NULL
 , date_val_lt datetime NULL
-, double_val_gt double not null
-, double_val_lt double not null
+, double_val_gt double null
+, double_val_lt double null
 , has_seen_template_id bigint NULL
 , has_not_seen_template_id bigint null
-, date_created timestamp default '0000-00-00 00:00:00'
+, date_created timestamp default now()
 , last_updated timestamp default now() on update now()
 , PRIMARY KEY (send_rule_id)
 );
+
+insert into drip_tag (tag_name, descrip) VALUES ('Careers pilot', 'First experiment with careers drip')
