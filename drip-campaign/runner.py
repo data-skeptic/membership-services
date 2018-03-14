@@ -4,6 +4,7 @@ import sqlalchemy
 import logging
 import boto3
 import os
+from datetime import datetime
 from os.path import join, dirname
 from datetime import datetime
 from dotenv import load_dotenv
@@ -144,7 +145,7 @@ def user_template_sent_count(conn, user, drip_user_id, template_id):
     query = tpl.format(drip_user_id=drip_user_id, email_template_id=template_id)
     df = pd.read_sql(query, conn)
     c = df.iloc[0]['c']
-    logger.info('Counted ' + str(c) + ' templates sent.')
+    logger.debug('Counted ' + str(c) + ' templates sent for drip_user_id=' + str(drip_user_id))
     return c
 
 def check_rule(now, conn, rule, template, user, user_tags):
@@ -152,7 +153,6 @@ def check_rule(now, conn, rule, template, user, user_tags):
     template_id = rule['email_template_id']
     drip_user_id = user['drip_user_id']
     has_seen_count = user_template_sent_count(conn, user, drip_user_id, template_id)
-    print(template)
     send_cap = template['metadata']['send_cap']
     if has_seen_count >= send_cap:
         return None
@@ -211,15 +211,21 @@ def get_content_from_s3(s3, bucketname, s3key):
     except botocore.exceptions.ClientError as e:
         logger.error('Count not get ' + s3key)
         if e.response['Error']['Code'] == "404":
-            print("The object does not exist.")
+            logger.error("The object does not exist.")
         return None
 
-def save_personalize_content(now, s3, bucketname, content, template_file_location):
+def save_personalize_content(now, s3, bucketname, content, email, template_file_location):
     # TODO: personalize the content
     template_name = template_file_location.replace('/', '_')
     yyyy_mm = str(now)[0:7]
     dd_hh_ii_ss = str(now)[8:19].replace(':', '_').replace(' ', '_')
-    s3key = 'emails/{email}/{yyyy_mm}/{dd_hh_ii_ss}-{template_name}'
+    s3key_template = 'email/sent/{email}/{yyyy_mm}/{dd_hh_ii_ss}-{template_name}'
+    n = str(datetime.now())
+    yyyy_mm = n[0:7].replace('-', '_')
+    dd_hh_ii_ss = n[8:19].replace(':', '_').replace(' ', '_')
+    i = template_file_location.rfind('/') + 1
+    template_name = template_file_location[i:].replace('.tpl', '.htm')
+    s3key = s3key_template.format(email=email, yyyy_mm=yyyy_mm, dd_hh_ii_ss=dd_hh_ii_ss, template_name=template_name)
     logger.debug("save_personalize_content to " + s3key)
     obj = s3.Object(bucketname, s3key)
     obj.put(Body=content)
@@ -228,37 +234,38 @@ def save_personalize_content(now, s3, bucketname, content, template_file_locatio
 def personalize_content(content):
     return content
 
-def save_rendered_template(now, s3, bucketname, template):
+def save_rendered_template(now, s3, bucketname, email, template):
     logger.debug("save_rendered_template")
-    print(template, '!')
     template_file_location = template['metadata']['template_file_location']
     content = get_content_from_s3(s3, bucketname, template_file_location)
     if content is None:
         return None
     content2 = personalize_content(content)
-    rendered_output_location = save_personalize_content(now, s3, bucketname, content2, template_file_location)
+    rendered_output_location = save_personalize_content(now, s3, bucketname, content2, email, template_file_location)
     return rendered_output_location
 
-def queue_to_send(now, s3, conn, bucketname, drip_user_id, send_rule_id, template):
+def queue_to_send(now, s3, conn, bucketname, drip_user_id, email, send_rule_id, template):
     logger.debug("queue_to_send")
-    print(drip_user_id, send_rule_id, template)
-    rendered_output_location = save_rendered_template(now, s3, bucketname, template)
+    rendered_output_location = save_rendered_template(now, s3, bucketname, email, template)
     if rendered_output_location is not None:
         t = insert_into_drip_send
         email_template_id = template['metadata']['email_template_id']
-        query = t.format(drip_user_id=drip_user_id, send_rule_id=send_rule_id, email_template_id=email_template_id, rendered_output_location=rendered_output_location)
+        query = t.format(drip_user_id=drip_user_id, send_rule_id=send_rule_id
+            , email_template_id=email_template_id, rendered_output_location=rendered_output_location)
         conn.execute(query)
     else:
-        print("ERROR: could not render.")
+        logger.error("ERROR: could not render.")
         # TODO: call to TSE
 
 def do_mail_run(now, conn, s3, bucketname):
     logger.debug("do_mail_run")
+    sending = 0
     users     = get_all_users(conn)
     rules     = get_all_rules(conn)
     tags      = get_all_tag_xrefs(conn)
     templates = get_all_templates(conn, s3, bucketname)
     for user in users:
+        email = user['email']
         drip_user_id = user['drip_user_id']
         if drip_user_id in tags:
             user_tags = tags[drip_user_id]
@@ -276,10 +283,11 @@ def do_mail_run(now, conn, s3, bucketname):
                         max_send_rule_id = rule['send_rule_id']
                         email_to_send = result
             if email_to_send is not None:
+                sending += 1
                 email_template_id = email_to_send['email_template_id']
                 template = templates[email_template_id]
-                queue_to_send(now, s3, conn, bucketname, drip_user_id, max_send_rule_id, template)
-
+                queue_to_send(now, s3, conn, bucketname, drip_user_id, email, max_send_rule_id, template)
+    logger.info("Sending " + str(sending) + " email from a pool of " + str(len(users)) + ".")
 
 if __name__ == '__main__':
     logger.info("Init")
