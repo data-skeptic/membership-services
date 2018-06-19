@@ -95,4 +95,5 @@ response = ses.send_email(
     },
     Source='kyle@dataskeptic.com'
 )
+print(response)
 
